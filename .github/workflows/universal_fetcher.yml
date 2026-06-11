@@ -1,0 +1,57 @@
+name: Universal Package Fetcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        required: true
+        default: 'requests'
+      python_version:
+        required: true
+        default: '3.10'
+      os_type:
+        required: true
+        default: 'win_amd64'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '${{ github.event.inputs.python_version }}'
+
+      - name: Download Package
+        run: |
+          mkdir -p payload/offline_packages
+          pip download ${{ github.event.inputs.package_name }} \
+            -d payload/offline_packages \
+            --platform ${{ github.event.inputs.os_type }} \
+            --only-binary=:all:
+
+      - name: Validate
+        run: |
+          count=$(find payload/offline_packages -name "*.whl" | wc -l)
+          if [ "$count" -eq "0" ]; then exit 1; fi
+
+      - name: Zip Package
+        run: |
+          cd payload
+          zip -r ../package.zip offline_packages/
+
+      - name: Create Release and Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="pkg-${{ github.event.inputs.package_name }}-${{ github.event.inputs.os_type }}-${{ github.run_id }}"
+          gh release create "$TAG" package.zip \
+            --title "${{ github.event.inputs.package_name }} (${{ github.event.inputs.os_type }})" \
+            --notes "Auto-generated. Python ${{ github.event.inputs.python_version }}" \
+            --prerelease
