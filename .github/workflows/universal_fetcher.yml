@@ -46,12 +46,14 @@ jobs:
           cd payload
           zip -r ../package.zip offline_packages/
 
+
       - name: Create Release and Upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="pkg-${{ github.event.inputs.package_name }}-${{ github.event.inputs.os_type }}-${{ github.run_id }}"
+          SAFE_PKG=$(echo "${{ github.event.inputs.package_name }}" | tr '>=<!' '----' | tr -d ' ')
+          TAG="pkg-${SAFE_PKG}-${{ github.event.inputs.os_type }}-${{ github.run_id }}"
           gh release create "$TAG" package.zip \
-            --title "${{ github.event.inputs.package_name }} (${{ github.event.inputs.os_type }})" \
-            --notes "Auto-generated. Python ${{ github.event.inputs.python_version }}" \
-            --prerelease
+          --title "${{ github.event.inputs.package_name }} (${{ github.event.inputs.os_type }})" \
+          --notes "Auto-generated. Python ${{ github.event.inputs.python_version }}" \
+          --prerelease
