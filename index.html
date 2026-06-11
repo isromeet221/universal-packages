@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PyPI Offline Fetcher</title>
+</head>
+<body>
+  <h2>Download Offline Python Package</h2>
+
+  <input id="pkg" placeholder="e.g. uvicorn or uvicorn==0.29.0" />
+
+  <select id="pyver">
+    <option value="3.8">Python 3.8</option>
+    <option value="3.9">Python 3.9</option>
+    <option value="3.10" selected>Python 3.10</option>
+    <option value="3.11">Python 3.11</option>
+    <option value="3.12">Python 3.12</option>
+  </select>
+
+  <select id="os">
+    <option value="win_amd64">Windows 64-bit</option>
+    <option value="win32">Windows 32-bit</option>
+    <option value="manylinux_2_17_x86_64">Linux x86_64</option>
+    <option value="manylinux_2_17_aarch64">Linux ARM64</option>
+    <option value="macosx_12_0_x86_64">macOS Intel</option>
+    <option value="macosx_12_0_arm64">macOS Apple Silicon</option>
+  </select>
+
+  <button onclick="trigger()">Fetch Package</button>
+  <div id="status"></div>
+
+  <script>
+    const OWNER = 'isromeet221';
+    const REPO = 'universal-packages';
+    const TOKEN = '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';
+
+    async function trigger() {
+      const pkg = document.getElementById('pkg').value.trim();
+      const pyver = document.getElementById('pyver').value;
+      const os = document.getElementById('os').value;
+
+      if (!pkg) { document.getElementById('status').innerText = 'Enter a package name.'; return; }
+
+      document.getElementById('status').innerText = 'Triggering workflow...';
+
+      const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/universal_fetcher.yml/dispatches`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${TOKEN}`,
+          'Accept': 'application/vnd.github+json'
+        },
+        body: JSON.stringify({
+          ref: 'main',
+          inputs: { package_name: pkg, python_version: pyver, os_type: os }
+        })
+      });
+
+      if (res.status === 204) {
+        document.getElementById('status').innerText = 'Workflow triggered. Waiting 75s before checking release...';
+        setTimeout(() => pollRelease(pkg, os), 75000);
+      } else {
+        document.getElementById('status').innerText = `Trigger failed: ${res.status}`;
+      }
+    }
+
+    async function pollRelease(pkg, os, attempts = 0) {
+      if (attempts > 10) {
+        document.getElementById('status').innerText = 'Timed out. Check Actions tab manually.';
+        return;
+      }
+
+      const pkgBase = pkg.split('==')[0].split('>=')[0].split('<=')[0];
+
+      const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/releases`, {
+        headers: { 'Authorization': `Bearer ${TOKEN}` }
+      });
+      const releases = await res.json();
+      const match = releases.find(r =>
+        r.tag_name.includes(pkgBase) &&
+        r.tag_name.includes(os) &&
+        r.assets.length > 0
+      );
+
+      if (match) {
+        const url = match.assets[0].browser_download_url;
+        document.getElementById('status').innerHTML = `<a href="${url}" download>Download ${pkg} (${os})</a>`;
+      } else {
+        document.getElementById('status').innerText = `Not ready yet, retrying... (attempt ${attempts + 1}/10)`;
+        setTimeout(() => pollRelease(pkg, os, attempts + 1), 15000);
+      }
+    }
+  </script>
+</body>
+</html>
