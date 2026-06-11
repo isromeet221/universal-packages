@@ -30,63 +30,90 @@
 
   <script>
     const OWNER = 'isromeet221';
-    const REPO = 'universal-packages';
+    const REPO  = 'universal-packages';
     const TOKEN = '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';
 
+    const API_VERSION = '2026-03-10';
+
+    const HEADERS = {
+      'Authorization': `Bearer ${TOKEN}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': API_VERSION
+    };
+
+    let triggerredRunId = null;
+
     async function trigger() {
-      const pkg = document.getElementById('pkg').value.trim();
+      const pkg   = document.getElementById('pkg').value.trim();
       const pyver = document.getElementById('pyver').value;
-      const os = document.getElementById('os').value;
+      const os    = document.getElementById('os').value;
 
-      if (!pkg) { document.getElementById('status').innerText = 'Enter a package name.'; return; }
+      if (!pkg) { setStatus('Enter a package name.'); return; }
 
-      document.getElementById('status').innerText = 'Triggering workflow...';
+      setStatus('Triggering workflow...');
 
-      const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/universal_fetcher.yml/dispatches`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${TOKEN}`,
-          'Accept': 'application/vnd.github+json'
-        },
-        body: JSON.stringify({
-          ref: 'main',
-          inputs: { package_name: pkg, python_version: pyver, os_type: os }
-        })
-      });
+      // record time just before dispatch so we can find the correct run
+      const dispatchTime = new Date().toISOString();
 
-      if (res.status === 204) {
-        document.getElementById('status').innerText = 'Workflow triggered. Waiting 75s before checking release...';
-        setTimeout(() => pollRelease(pkg, os), 75000);
-      } else {
-        document.getElementById('status').innerText = `Trigger failed: ${res.status}`;
-      }
-    }
+      const res = await fetch(
+        `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/universal_fetcher.yml/dispatches`,
+        {
+          method: 'POST',
+          headers: HEADERS,
+          body: JSON.stringify({
+            ref: 'main',
+            inputs: { package_name: pkg, python_version: pyver, os_type: os }
+          })
+        }
+      );
 
-    async function pollRelease(pkg, os, attempts = 0) {
-      if (attempts > 10) {
-        document.getElementById('status').innerText = 'Timed out. Check Actions tab manually.';
+      if (res.status !== 204) {
+        setStatus(`Trigger failed: HTTP ${res.status}`);
         return;
       }
 
-      const pkgBase = pkg.split('==')[0].split('>=')[0].split('<=')[0];
+      // build the exact tag the workflow will create (must match workflow SAFE_PKG logic)
+      const safePkg = pkg.replace(/[>=<]/g, '-');
+      const tag     = `pkg-${safePkg}-${os}`;   // run_id appended by workflow, so poll by prefix
 
-      const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/releases`, {
-        headers: { 'Authorization': `Bearer ${TOKEN}` }
-      });
+      setStatus('Workflow triggered. Waiting 75s before polling...');
+      setTimeout(() => pollByTag(tag, os, pkg, 0), 75000);
+    }
+
+    // Poll using GET /releases/tags/{tag} — exact lookup, no fuzzy scan
+    // Because run_id is appended, we fall back to list + prefix match but with correct version header
+    async function pollByTag(tagPrefix, os, pkg, attempts) {
+      if (attempts > 10) { setStatus('Timed out. Check the Actions tab.'); return; }
+
+      // list releases with correct API version and max page size
+      const res = await fetch(
+        `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`,
+        { headers: HEADERS }
+      );
+
+      if (!res.ok) { setStatus(`Release list failed: HTTP ${res.status}`); return; }
+
       const releases = await res.json();
+
+      // match by tag prefix (pkg-<name>-<os>-<run_id>)
       const match = releases.find(r =>
-        r.tag_name.includes(pkgBase) &&
-        r.tag_name.includes(os) &&
-        r.assets.length > 0
+        r.tag_name.startsWith(tagPrefix) &&
+        r.assets.length > 0 &&
+        r.assets[0].state === 'uploaded'   // doc field: confirms asset fully uploaded
       );
 
       if (match) {
         const url = match.assets[0].browser_download_url;
-        document.getElementById('status').innerHTML = `<a href="${url}" download>Download ${pkg} (${os})</a>`;
+        document.getElementById('status').innerHTML =
+          `<a href="${url}">Download ${pkg} (${os})</a>`;
       } else {
-        document.getElementById('status').innerText = `Not ready yet, retrying... (attempt ${attempts + 1}/10)`;
-        setTimeout(() => pollRelease(pkg, os, attempts + 1), 15000);
+        setStatus(`Not ready, retrying... (${attempts + 1}/10)`);
+        setTimeout(() => pollByTag(tagPrefix, os, pkg, attempts + 1), 15000);
       }
+    }
+
+    function setStatus(msg) {
+      document.getElementById('status').innerText = msg;
     }
   </script>
 </body>
