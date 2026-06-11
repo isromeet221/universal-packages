@@ -33,15 +33,16 @@
     const REPO  = 'universal-packages';
     const TOKEN = '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';
 
-    const API_VERSION = '2026-03-10';
-
     const HEADERS = {
       'Authorization': `Bearer ${TOKEN}`,
       'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': API_VERSION
+      'X-GitHub-Api-Version': '2026-03-10'
     };
 
-    let triggerredRunId = null;
+    // mirrors the exact tr command in the workflow
+    function sanitizePkg(pkg) {
+      return pkg.replace(/[>=<!]/g, '-').replace(/\s/g, '');
+    }
 
     async function trigger() {
       const pkg   = document.getElementById('pkg').value.trim();
@@ -52,9 +53,6 @@
 
       setStatus('Triggering workflow...');
 
-      // record time just before dispatch so we can find the correct run
-      const dispatchTime = new Date().toISOString();
-
       const res = await fetch(
         `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/universal_fetcher.yml/dispatches`,
         {
@@ -62,7 +60,11 @@
           headers: HEADERS,
           body: JSON.stringify({
             ref: 'main',
-            inputs: { package_name: pkg, python_version: pyver, os_type: os }
+            inputs: {
+              package_name: pkg,
+              python_version: pyver,
+              os_type: os
+            }
           })
         }
       );
@@ -72,34 +74,37 @@
         return;
       }
 
-      // build the exact tag the workflow will create (must match workflow SAFE_PKG logic)
-      const safePkg = pkg.replace(/[>=<]/g, '-');
-      const tag     = `pkg-${safePkg}-${os}`;   // run_id appended by workflow, so poll by prefix
+      // build tag prefix exactly as workflow does:
+      // pkg-<SAFE_PKG>-<os_type>-  (run_id appended by workflow, unknown here)
+      const safePkg  = sanitizePkg(pkg);
+      const tagPrefix = `pkg-${safePkg}-${os}-`;
 
-      setStatus('Workflow triggered. Waiting 75s before polling...');
-      setTimeout(() => pollByTag(tag, os, pkg, 0), 75000);
+      setStatus('Triggered. Waiting 75s before polling...');
+      setTimeout(() => pollReleases(tagPrefix, pkg, os, 0), 75000);
     }
 
-    // Poll using GET /releases/tags/{tag} — exact lookup, no fuzzy scan
-    // Because run_id is appended, we fall back to list + prefix match but with correct version header
-    async function pollByTag(tagPrefix, os, pkg, attempts) {
-      if (attempts > 10) { setStatus('Timed out. Check the Actions tab.'); return; }
+    async function pollReleases(tagPrefix, pkg, os, attempts) {
+      if (attempts > 10) {
+        setStatus('Timed out. Check the Actions tab manually.');
+        return;
+      }
 
-      // list releases with correct API version and max page size
       const res = await fetch(
         `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`,
         { headers: HEADERS }
       );
 
-      if (!res.ok) { setStatus(`Release list failed: HTTP ${res.status}`); return; }
+      if (!res.ok) {
+        setStatus(`Release list failed: HTTP ${res.status}`);
+        return;
+      }
 
       const releases = await res.json();
 
-      // match by tag prefix (pkg-<name>-<os>-<run_id>)
       const match = releases.find(r =>
         r.tag_name.startsWith(tagPrefix) &&
         r.assets.length > 0 &&
-        r.assets[0].state === 'uploaded'   // doc field: confirms asset fully uploaded
+        r.assets[0].state === 'uploaded'
       );
 
       if (match) {
@@ -108,7 +113,7 @@
           `<a href="${url}">Download ${pkg} (${os})</a>`;
       } else {
         setStatus(`Not ready, retrying... (${attempts + 1}/10)`);
-        setTimeout(() => pollByTag(tagPrefix, os, pkg, attempts + 1), 15000);
+        setTimeout(() => pollReleases(tagPrefix, pkg, os, attempts + 1), 15000);
       }
     }
 
